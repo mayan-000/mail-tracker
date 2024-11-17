@@ -28,6 +28,9 @@ def login_request_otp():
     data = request.json
     email = data.get("email")
 
+    if not email:
+        return jsonify({"status": "error", "message": "Email is required"}, 400)
+
     otp = generate_otp()
     otp_expiry = datetime.now() + timedelta(minutes=10)
 
@@ -81,6 +84,11 @@ def login_verify_otp():
     data = request.json
     email = data.get("email")
     otp = data.get("otp")
+
+    if not email or not otp:
+        return jsonify(
+            {"status": "error", "message": "Email and OTP are required"}, 400
+        )
 
     response = users_table.scan(
         FilterExpression="email = :email", ExpressionAttributeValues={":email": email}
