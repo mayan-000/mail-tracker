@@ -2,8 +2,10 @@ from flask import Flask
 import logging
 from dotenv import load_dotenv
 import os
+from flask_cors import CORS
 
 load_dotenv()
+
 
 def create_app():
     app = Flask(__name__)
@@ -14,6 +16,8 @@ def create_app():
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(routes_bp)
+
+    CORS(app)
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"

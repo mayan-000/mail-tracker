@@ -1,11 +1,15 @@
 import os
 import boto3
-from flask import Blueprint, session, request, jsonify
+from flask import Blueprint, session, request, jsonify, send_file
 import base64
 import datetime
 import uuid
+from io import BytesIO
+from flask_cors import CORS
+import logging
 
 routes_bp = Blueprint("routes", __name__)
+CORS(routes_bp)
 
 dynamodb_endpoint = os.getenv("DYNAMODB_ENDPOINT", "http://localhost:4566")
 region_name = os.getenv("REGION_NAME", "ap-south-1")
@@ -14,23 +18,41 @@ dynamodb = boto3.resource(
     "dynamodb", region_name=region_name, endpoint_url=dynamodb_endpoint
 )
 emails_table = dynamodb.Table("emails")
+users_table = dynamodb.Table("users")
 
 
-def createHash(*args):
-    return base64.b64encode("".join(args).encode()).decode()
+def create_hash(*args):
+    _args = [str(arg) for arg in args]
+    return base64.b64encode("".join(_args).encode()).decode()
 
 
 @routes_bp.route("/create-tracker", methods=["POST"])
 def create_tracker():
     data = request.json
-    user_id = data.get("user_id")
+    logging.info(data)
+    from_email = data.get("from_email")
     receiver_email = data.get("receiver_email")
     subject = data.get("subject")
 
-    if not user_id or not receiver_email or not subject:
+    if not from_email or not receiver_email or not subject:
         return jsonify({"status": "error", "message": "Missing required fields"}, 400)
 
-    message_id = createHash(user_id, receiver_email, subject)
+    response = users_table.scan(
+        FilterExpression="email = :email",
+        ExpressionAttributeValues={":email": from_email},
+    )
+    items = response.get("Item", [])
+    user_id = None
+
+    if items:
+        user_id = items[0].get("user_id")
+
+    if not user_id:
+        user_id = create_hash(from_email)
+        users_table.put_item(Item={"user_id": user_id, "email": from_email})
+
+    milliseconds = datetime.datetime.now().timestamp() * 1000
+    message_id = create_hash(user_id, receiver_email, subject, milliseconds)
 
     emails_table.put_item(
         Item={
@@ -43,17 +65,16 @@ def create_tracker():
         }
     )
 
-    return jsonify({"staus": "success", "message_id": message_id})
+    return jsonify({"status": "success", "message_id": message_id})
 
 
 def generate_base64_image():
     pixel = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\xdac\xf8\xff\xff?\x00\x05\xfe\x02\xfe\xa7\x8d\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
-    base64_pixel = base64.b64encode(pixel).decode("utf-8")
+    
+    return pixel
 
-    return base64_pixel
 
-
-@routes_bp.route("/track/<message_id>", methods=["POST"])
+@routes_bp.route("/track/<message_id>.png", methods=["GET"])
 def track(message_id):
     response = emails_table.get_item(Key={"message_id": message_id})
     item = response.get("Item")
@@ -77,7 +98,7 @@ def track(message_id):
 
     base64_pixel = generate_base64_image()
 
-    return jsonify({"status": "success", "pixel": base64_pixel})
+    return send_file(BytesIO(base64_pixel), mimetype="image/png")
 
 
 @routes_bp.route("/get-tracker", methods=["GET"])
